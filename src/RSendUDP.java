@@ -8,6 +8,8 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.UnknownHostException;
+import java.time.*;
+import java.util.Timer;
 
 import edu.utulsa.unet.RSendUDPI;
 import edu.utulsa.unet.UDPSocket;
@@ -18,7 +20,7 @@ public class RSendUDP implements RSendUDPI {
 	private int localPort = 12987;
 	private String filename = "";
 	private InetAddress inet = InetAddress.getLocalHost();
-	private InetSocketAddress receiver = new InetSocketAddress(inet, 21123);
+	private InetSocketAddress receiver = new InetSocketAddress(inet, 12988);
 	private long timeout = 1000;
 
 	public RSendUDP() throws UnknownHostException {
@@ -61,18 +63,22 @@ public class RSendUDP implements RSendUDPI {
 	public boolean sendFile() {
 
 		if (mode == 0) {
+			//Print an initial message indicating Local IP, ARQ Alg, UDP sending to
 			System.out.println("Sending " + filename + " on local port : " + localPort + " to address: "+ " on port: " + "using stop-and-wait algorithm");
+			
 			UDPSocket socket;
 			int mtu;
 			try {
 				// socket that will send message to receiver
 				socket = new UDPSocket(localPort);
+				System.out.println("Sending from localPort: " + localPort);
 				mtu = socket.getSendBufferSize();
 				if (mtu == -1) {
 					mtu = Integer.MAX_VALUE;
 				}
 
 			} catch (Exception e) {
+				System.out.println("Error: Initial connection to localPort: " +localPort + " failed");
 				System.err.println(e);
 				return false;
 			}
@@ -81,12 +87,15 @@ public class RSendUDP implements RSendUDPI {
 				System.out.println("File Not Found");
 				return false;
 			}
+			else {
+				System.out.println("Successfully found file");
+			}
 			long fileLength = file.length();
 
 			FileInputStream fis;
 			/*
-			 * Build header Seq. # 1 byte, more or eof, port to respond to 2 Bytes (acksocket), IP to
-			 * respond to
+			 * Build header Seq. # 1 byte, more or eof, port to respond to 2 Bytes (acksocket)?, IP to
+			 * respond to? Could be grabbed from socket datagram I believe
 			 */
 			byte[] header = new byte[3];
 			byte[] message;
@@ -99,6 +108,7 @@ public class RSendUDP implements RSendUDPI {
 			}
 			int filePointer = 0;
 			int readSize = mtu - header.length;
+
 			int sequenceNum = 0;
 			int dataRead = 0;
 			while (filePointer < fileLength) {
@@ -107,25 +117,41 @@ public class RSendUDP implements RSendUDPI {
 				header[1] = (byte) ((sequenceNum >> 8) & 0xFF);
 				
 				// get message data from file using fis
-				message = new byte[readSize];
 				try {
 					if ((filePointer + readSize) <= fileLength) {
-						dataRead = fis.read(message, filePointer, readSize);
+						message = new byte[readSize];
+						dataRead = fis.read(message, 0, readSize);
 						filePointer += readSize;
 						header[2] = (byte) 255;//signifies more messages are coming
 					}
 					else {
-						dataRead = fis.read(message, filePointer, (int) fileLength-filePointer);
+						message = new byte[(int) (fileLength-filePointer)];
+						dataRead = fis.read(message, 0, (int) fileLength-filePointer);
+						filePointer = (int) fileLength;
 						header[2] = (byte) 0;//signifies last message transmitted
 					}
 				} catch (IOException e) {
 					e.printStackTrace();
 					return false;
 				}
-				System.out.println("DR: " +dataRead);
+				
+				//create the concatenated header + payload to send
 				transfer = concat(header, message);
 				try {
 					socket.send(new DatagramPacket(transfer, transfer.length, receiver.getAddress(), receiver.getPort()));
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+				
+				//wait for an ack
+				try {
+					byte[] ack = new byte[2];
+					DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
+					TimerTask task = 
+					Timer timer = new Timer();
+					socket.receive(ackPacket);
+					int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
+					System.out.println("Ack for " + ackSeqNum);
 				} catch (IOException e) {
 					e.printStackTrace();
 				}
@@ -133,6 +159,7 @@ public class RSendUDP implements RSendUDPI {
 			}
 			
 		} else if (mode == 1) {
+			System.out.println("Sending " + filename + " on local port : " + localPort + " to address: "+ " on port: " + "using sliding-window algorithm");
 			UDPSocket socket;
 			long maxSeqNum;
 			try {

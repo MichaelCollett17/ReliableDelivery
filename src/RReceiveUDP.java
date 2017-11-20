@@ -1,3 +1,4 @@
+import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.InetAddress;
 import java.net.SocketException;
@@ -12,7 +13,7 @@ public class RReceiveUDP implements RReceiveUDPI {
 	private long modeParameter = 256;
 
 	final static int headerLength = 3;
-	
+
 	public static void main(String[] args) {
 
 	}
@@ -43,60 +44,79 @@ public class RReceiveUDP implements RReceiveUDPI {
 	 * Initiates file reception Returns true if successful
 	 */
 	public boolean receiveFile() {
-			if (mode == 0) {
-				//print initial message
-				System.out.println("Receiving " + filename + " on local IP: " + "  and local port : " + localPort + "using stop-and-wait algorithm");
-				UDPSocket socket;
-				int mtu = 0;
-				byte [] buffer;
-				boolean morePackets = true;
+		if (mode == 0) {
+			// print initial message
+			System.out.println("Receiving on local port: " + localPort
+					+ " using stop-and-wait algorithm");
+			UDPSocket socket = null;
+			int mtu = 0;
+			byte[] buffer;
+			boolean morePackets = true;
 
+			try {
+				socket = new UDPSocket(localPort);
+				mtu = socket.getSendBufferSize();
+				
+			} catch (SocketException e) {
+				e.printStackTrace();
+			}
+
+			while (morePackets) {
 				try {
-					socket = new UDPSocket(localPort);
-					mtu = socket.getSendBufferSize();
-					
-				} catch (SocketException e) {
-					e.printStackTrace();
-				}
-				
-				
-				while(morePackets) {
 					buffer = new byte[mtu];
 					DatagramPacket readPacket = new DatagramPacket(buffer, buffer.length);
+					socket.receive(readPacket);
 					InetAddress clientAddress = readPacket.getAddress();
 					int clientPort = readPacket.getPort();
+					int seqNum = ((buffer[1] & 0xff) << 8) | (buffer[0] & 0xff);
+					int moreIndicator = (int) buffer[2];
+					System.out.println("Received packet from " + readPacket.getAddress().getHostAddress()
+							+ " with sender port: " + readPacket.getPort() + ", sequence number: " + seqNum + ", and data: "+ (buffer.length -3));
+					System.out.println("MEOW: " + new String(buffer));
 					
-					//LEFT OFF HERE NEED TO BREAK MORE PACKETS AND PROCESS PACKETS AND ALL THAT SHIT AND BRING THEM TO OPERATION REQUIREMENTS
+					//send ack
+					byte[] ack = new byte[2];
+					ack[0] = buffer[0];
+					ack[1] = buffer[1];
+					socket.send(new DatagramPacket(ack, ack.length, InetAddress.getByName(readPacket.getAddress().getHostAddress()), readPacket.getPort()));
+					if (moreIndicator == 0) {
+						System.out.println("Received last packet");
+						morePackets = false;
+					}
+				} catch (IOException e) {
+					e.printStackTrace();
+					return false;
 				}
 			}
-			else if (mode == 1) {
-				System.out.println("Receiving " + filename + " on local IP: " + "  and local port : " + localPort + "using sliding-window algorithm");
+		} else if (mode == 1) {
+			System.out.println("Receiving " + filename + " on local IP: " + "  and local port : " + localPort
+					+ "using sliding-window algorithm");
 
-			}
-			else {
-				System.out.println("Mode does not exist");
-				return false;
-			}
+		} else {
+			System.out.println("Mode does not exist");
+			return false;
+		}
+		return true;
 
-			//UDPSocket respond = new UDPSocket(12345);
+		// UDPSocket respond = new UDPSocket(12345);
 
-			while (true) {
-				//int mtu;
-				//socket.getSendBufferSize();
-				//byte[] buffer = new byte[64];
-				//DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-				//socket.receive(packet);// blocking reception
-				//InetAddress client = packet.getAddress();
-				//System.out.println(" Received " + new String(buffer) + " from " + packet.getAddress().getHostAddress()
-				//		+ " with sender port " + packet.getPort());
-				
-				
-				//byte[] ack = java.util.Arrays.copyOfRange(buffer, 0, 1);
-				//respond.send(new DatagramPacket(ack, ack.length,
-				//		InetAddress.getByName(packet.getAddress().getHostAddress()), 23457));
+		// while (true) {
+		// int mtu;
+		// socket.getSendBufferSize();
+		// byte[] buffer = new byte[64];
+		// DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+		// socket.receive(packet);// blocking reception
+		// InetAddress client = packet.getAddress();
+		// System.out.println(" Received " + new String(buffer) + " from " +
+		// packet.getAddress().getHostAddress()
+		// + " with sender port " + packet.getPort());
 
-			}
-		} 
+		// byte[] ack = java.util.Arrays.copyOfRange(buffer, 0, 1);
+		// respond.send(new DatagramPacket(ack, ack.length,
+		// InetAddress.getByName(packet.getAddress().getHostAddress()), 23457));
+
+		// }
+	}
 
 	/*
 	 * Sets received file name
