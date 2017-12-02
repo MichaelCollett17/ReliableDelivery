@@ -13,9 +13,13 @@ import java.util.Date;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicBoolean;
-
 import edu.utulsa.unet.RSendUDPI;
 import edu.utulsa.unet.UDPSocket;
+
+/*
+ * Problems to fix:
+ *  1. Continuous transmission of last piece kind of fixed
+ */
 
 public class RSendUDP implements RSendUDPI {
 	private int mode = 0;
@@ -23,70 +27,41 @@ public class RSendUDP implements RSendUDPI {
 	private int localPort = 12987;
 	private String filename = "";
 	private InetAddress inet = InetAddress.getLocalHost();
-	private InetSocketAddress receiver = new InetSocketAddress(inet, 12988);
+	private InetSocketAddress receiver = new InetSocketAddress(inet, 12987);
 	private long timeout = 1000;
+	private UDPSocket socket;
+	private int mtu;
 
 	public RSendUDP() throws UnknownHostException {
-
-	}
-
-	// returns file name
-	public String getFilename() {
-		return filename;
-	}
-
-	// returns local port number
-	public int getLocalPort() {
-		return localPort;
 	}
 
 	/*
-	 * Returns an int indicating mode of operation
-	 */
-	public int getMode() {
-		return mode;
-	}
-
-	// returns mode parameter
-	public long getModeParameter() {
-		return windowSize;
-	}
-
-	public InetSocketAddress getReceiver() {
-		return receiver;
-	}
-
-	public long getTimeout() {
-		return timeout;
-	}
-
-	/*
-	 * initiates file transmission returns true if successful!
+	 * initiates file transmission returns true if successful
 	 */
 	public boolean sendFile() {
+		System.out.println("----------------Initiate sendFile()-----------------");
+
+		/*
+		 * Initialize Socket and MTU
+		 */
+		try {
+			socket = new UDPSocket(localPort);
+			mtu = socket.getSendBufferSize();
+			if (mtu == -1) {
+				mtu = Integer.MAX_VALUE;
+			}
+
+		} catch (Exception e) {
+			System.out.println("Error: Initial connection to localPort: " + localPort + " failed");
+			System.err.println(e);
+			return false;
+		}
 
 		if (mode == 0) {
-			// Print an initial message indicating Local IP, ARQ Alg, UDP sending to
-			System.out.println("Sending " + filename + " on local port : " + localPort + " to address: " + " on port: "
-					+ "using stop-and-wait algorithm");
+			System.out.println("### Sending " + filename + " on local port : " + localPort + " to address: "
+					+ " on port: " + "using stop-and-wait algorithm ###");
 
-			UDPSocket socket;
-			int mtu;
-			try {
-				// socket that will send message to receiver
-				socket = new UDPSocket(localPort);
-				System.out.println("Sending from localPort: " + localPort);
-				mtu = socket.getSendBufferSize();
-				if (mtu == -1) {
-					mtu = Integer.MAX_VALUE;
-				}
-
-			} catch (Exception e) {
-				System.out.println("Error: Initial connection to localPort: " + localPort + " failed");
-				System.err.println(e);
-				return false;
-			}
-			File file = new File("./" + filename);
+			File file = new File(filename);
 			if (!file.exists()) {
 				System.out.println("File Not Found");
 				return false;
@@ -94,13 +69,7 @@ public class RSendUDP implements RSendUDPI {
 				System.out.println("Successfully found file");
 			}
 			long fileLength = file.length();
-
 			FileInputStream fis;
-			/*
-			 * Build header Seq. # 1 byte, more or eof, port to respond to 2 Bytes
-			 * (acksocket)?, IP to respond to? Could be grabbed from socket datagram I
-			 * believe
-			 */
 			byte[] header = new byte[3];
 			byte[] message;
 			byte[] transfer;
@@ -112,7 +81,6 @@ public class RSendUDP implements RSendUDPI {
 			}
 			int filePointer = 0;
 			int readSize = mtu - header.length;
-
 			int sequenceNum = 0;
 			int dataRead = 0;
 			while (filePointer < fileLength) {
@@ -137,23 +105,11 @@ public class RSendUDP implements RSendUDPI {
 					e.printStackTrace();
 					return false;
 				}
-
-				// create the concatenated header + payload to send
 				transfer = concat(header, message);
-				
-				/* Creates another thread that receives the acks for the sent messages
-				 * Send packet
-				 */
 				try {
-					//volatile variable updated on each thread
 					AtomicBoolean ackNotReceived = new AtomicBoolean(true);
-					//Initialize Receive thread that calls the blocking receive call
-					Receive receive = new Receive();
-					receive.setAckNotReceived(ackNotReceived);
-					receive.setSocket(socket);
-					Thread recThread = new Thread(receive);
-					recThread.start();
-					//Initialize Retransmit Thread that retransmits every timeout that the ack is not received
+					byte[] ack = new byte[2];
+					DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
 					Retransmit retransmit = new Retransmit();
 					retransmit.setAckNotReceived(ackNotReceived);
 					retransmit.setReceiver(receiver);
@@ -161,31 +117,16 @@ public class RSendUDP implements RSendUDPI {
 					retransmit.setTimeout(timeout);
 					retransmit.setTransfer(transfer);
 					Thread retransThread = new Thread(retransmit);
-					retransThread.start();
 					socket.send(
 							new DatagramPacket(transfer, transfer.length, receiver.getAddress(), receiver.getPort()));
-					//pass boolean ackNotReceived to the retransmit thread and so it only retransmits if true. also only s
-					while(ackNotReceived.get()) {
-					}
-					//start the other thread that snaps curr time and schedules a retransmit
+					retransThread.start();
+					socket.receive(ackPacket);
+					int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
+					System.out.println("### Ack received for sequence number: " + ackSeqNum + " ###");
+					ackNotReceived.set(false);
 				} catch (IOException e) {
 					e.printStackTrace();
 				}
-
-				// wait for an ack
-				//try {
-					//byte[] ack = new byte[2];
-					//DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
-
-					
-					//Timer timer = new Timer();//might not need
-					
-					//socket.receive(ackPacket);
-					//int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
-					//System.out.println("Ack for " + ackSeqNum);
-				/*} catch (IOException e) {
-					e.printStackTrace();
-				}*/
 				sequenceNum++;
 			}
 
@@ -217,6 +158,36 @@ public class RSendUDP implements RSendUDPI {
 		}
 
 		return true;
+	}
+
+	// returns file name
+	public String getFilename() {
+		return filename;
+	}
+
+	// returns local port number
+	public int getLocalPort() {
+		return localPort;
+	}
+
+	/*
+	 * Returns an int indicating mode of operation
+	 */
+	public int getMode() {
+		return mode;
+	}
+
+	// returns mode parameter
+	public long getModeParameter() {
+		return windowSize;
+	}
+
+	public InetSocketAddress getReceiver() {
+		return receiver;
+	}
+
+	public long getTimeout() {
+		return timeout;
 	}
 
 	private byte[] concat(byte[] head, byte[] body) {
@@ -283,14 +254,13 @@ public class RSendUDP implements RSendUDPI {
 	}
 }
 
-
 class Retransmit implements Runnable {
 	public UDPSocket socket;
 	public byte[] transfer;
 	public InetSocketAddress receiver;
 	public AtomicBoolean ackNotReceived;
 	public long timeout;
-	
+
 	public void setTimeout(long timeout2) {
 		timeout = timeout2;
 	}
@@ -312,47 +282,21 @@ class Retransmit implements Runnable {
 	}
 
 	public void run() {
-		// Date timeOfTransmit = new Date();
 		long timeOfTransmit = System.currentTimeMillis();
+		int seqNum = ((transfer[1] & 0xff) << 8) | (transfer[0] & 0xff);
 		while (ackNotReceived.get()) {
 			if (timeOfTransmit + timeout < System.currentTimeMillis()) {
-				System.out.println("### Retransmitting Packet ###");
+				System.out.println("### Retransmitting Packet With Sequence Number: " + seqNum + " ###");
 				try {
-					socket.send(
-							new DatagramPacket(transfer, transfer.length, receiver.getAddress(), receiver.getPort()));
-					timeOfTransmit = System.currentTimeMillis();
+						socket.send(new DatagramPacket(transfer, transfer.length, receiver.getAddress(),
+								receiver.getPort()));
+						timeOfTransmit = System.currentTimeMillis();
+					
 				} catch (IOException e) {
 					e.printStackTrace();
 				}
 			}
 		}
 		return;
-	}
-}
-
-class Receive implements Runnable {
-	public AtomicBoolean ackNotReceived;
-	public UDPSocket socket;
-
-	public void setSocket(UDPSocket s) {
-		socket = s;
-	}
-	
-	public void setAckNotReceived(AtomicBoolean aNR) {
-		ackNotReceived = aNR;
-	}
-
-	public void run() {
-		byte[] ack = new byte[2];
-		DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
-		try {
-			socket.receive(ackPacket);
-			int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
-			System.out.println("Ack for " + ackSeqNum);
-			ackNotReceived.set(false);
-			return;
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
 	}
 }
