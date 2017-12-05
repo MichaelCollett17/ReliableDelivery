@@ -9,7 +9,10 @@ import java.net.Socket;
 import java.net.SocketException;
 import java.net.UnknownHostException;
 import java.time.*;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
+import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -33,6 +36,9 @@ public class RSendUDP implements RSendUDPI {
 	private int mtu = 0;
 	private long lastAckReceived, lastFrameSent = -1;
 	private long maxOutstandingFrames;
+	private List<AtomicBoolean> outstandingRetransmitters = Collections.synchronizedList(new ArrayList<AtomicBoolean>());
+	private InetAddress serverAddress;
+	private int serverPort;
 
 	public RSendUDP() throws UnknownHostException {
 	}
@@ -47,6 +53,7 @@ public class RSendUDP implements RSendUDPI {
 		byte[] header = new byte[3];
 		byte[] message;
 		byte[] transfer;
+		boolean first = true;
 		System.out.println("----------------Initiate sendFile()-----------------");
 
 		try {
@@ -60,30 +67,40 @@ public class RSendUDP implements RSendUDPI {
 			System.err.println(e);
 			return false;
 		}
-		maxOutstandingFrames = windowSize/mtu;
-		
+		maxOutstandingFrames = windowSize / mtu;
+
+		file = new File(filename);
+		if (!file.exists()) {
+			System.out.println("File Not Found");
+			return false;
+		} else {
+			System.out.println("Successfully found file");
+		}
+		fileLength = file.length();
+		try {
+			fis = new FileInputStream(file);
+		} catch (IOException e) {
+			e.printStackTrace();
+			return false;
+		}
+		int filePointer = 0;
+		int readSize = mtu - header.length;
+		int sequenceNum = 0;
+		int dataRead = 0;
+
 		if (mode == 0) {
 			System.out.println("### Sending " + filename + " on local port : " + localPort + " to address: "
 					+ " on port: " + "using stop-and-wait algorithm ###");
-			file = new File(filename);
-			if (!file.exists()) {
-				System.out.println("File Not Found");
-				return false;
-			} else {
-				System.out.println("Successfully found file");
-			}
-			fileLength = file.length();
-			try {
-				fis = new FileInputStream(file);
-			} catch (IOException e) {
-				e.printStackTrace();
-				return false;
-			}
-			int filePointer = 0;
-			int readSize = mtu - header.length;
-			int sequenceNum = 0;
-			int dataRead = 0;
-			while (filePointer < fileLength) {
+		} else if (mode == 1) {
+			System.out.println("Sending " + filename + " on local port : " + localPort + " to address: " + " on port: "
+					+ "using sliding-window algorithm");
+
+		} else {
+			System.out.println("Error: Mode does not exist");
+			return false;
+		}
+		while (filePointer < fileLength) {
+			if ((lastFrameSent - lastAckReceived) < maxOutstandingFrames) {
 				header[0] = (byte) (sequenceNum & 0xFF);
 				header[1] = (byte) ((sequenceNum >> 8) & 0xFF);
 				try {
@@ -105,8 +122,6 @@ public class RSendUDP implements RSendUDPI {
 				transfer = concat(header, message);
 				try {
 					AtomicBoolean ackNotReceived = new AtomicBoolean(true);
-					byte[] ack = new byte[2];
-					DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
 					Retransmit retransmit = new Retransmit();
 					retransmit.setAckNotReceived(ackNotReceived);
 					retransmit.setReceiver(receiver);
@@ -117,31 +132,37 @@ public class RSendUDP implements RSendUDPI {
 					socket.send(
 							new DatagramPacket(transfer, transfer.length, receiver.getAddress(), receiver.getPort()));
 					retransThread.start();
-					socket.receive(ackPacket);
-					int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
-					System.out.println("### Ack received for sequence number: " + ackSeqNum + " ###");
-					ackNotReceived.set(false);
+					if (mode == 0) {
+						byte[] ack = new byte[2];
+						DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
+						socket.receive(ackPacket);
+						if (first) {
+							serverAddress = ackPacket.getAddress();
+							serverPort = ackPacket.getPort();
+							System.out.println("### Connection established with " + serverAddress + " on port "
+									+ serverPort + " ###");
+							first = false;
+						}
+						int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
+						System.out.println("### Ack received for sequence number: " + ackSeqNum + " ###");
+						ackNotReceived.set(false);
+					}
+					if (mode == 1) {
+						outstandingRetransmitters.add(ackNotReceived);
+						/*
+						 * create new thread that receives and updates lar and lfs and kills the thread
+						 * that is retransmitting via an arraylist of atomic booleans... this thread
+						 * might just want to be run once.
+						 */
+						
+					}
 				} catch (IOException e) {
 					e.printStackTrace();
 				}
 				sequenceNum++;
-			}
-
-		} else if (mode == 1) {
-			long lastAckReceived; //-1 to start
-			
-			System.out.println("Sending " + filename + " on local port : " + localPort + " to address: " + " on port: "
-					+ "using sliding-window algorithm");
-
-			file = new File("./" + filename);
-			try {
-				fis = new FileInputStream(file);
-			} catch (IOException e) {
-				e.printStackTrace();
-			}
-		} else {
-			System.out.println("Error: Mode does not exist");
+			} // end of large if
 		}
+
 		System.out.println("----------------End sendFile()-----------------");
 		return true;
 	}
@@ -238,6 +259,34 @@ public class RSendUDP implements RSendUDPI {
 		timeout = arg0;
 		return true;
 	}
+}
+
+class Receives implements Runnable{
+	public List<AtomicBoolean> outstandingBools;
+	public AtomicBoolean done;
+	public UDPSocket socket;
+	
+	public Receives(List<AtomicBoolean> ob, AtomicBoolean d) {
+		outstandingBools = ob;
+		done = d;
+	}
+	
+	public void run() {
+		byte[] ack = new byte[2];
+		DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
+		try {
+			socket.receive(ackPacket);
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
+		System.out.println("### Ack received for sequence number: " + ackSeqNum + " ###");
+		//set correct atom bool to false and remove from list
+	}
+}
+
+class RetransmitRecord{
+	private AtomicBoolean 
 }
 
 class Retransmit implements Runnable {
