@@ -30,7 +30,9 @@ public class RSendUDP implements RSendUDPI {
 	private InetSocketAddress receiver = new InetSocketAddress(inet, 12987);
 	private long timeout = 1000;
 	private UDPSocket socket;
-	private int mtu;
+	private int mtu = 0;
+	private long lastAckReceived, lastFrameSent = -1;
+	private long maxOutstandingFrames;
 
 	public RSendUDP() throws UnknownHostException {
 	}
@@ -39,40 +41,38 @@ public class RSendUDP implements RSendUDPI {
 	 * initiates file transmission returns true if successful
 	 */
 	public boolean sendFile() {
+		File file;
+		long fileLength;
+		FileInputStream fis;
+		byte[] header = new byte[3];
+		byte[] message;
+		byte[] transfer;
 		System.out.println("----------------Initiate sendFile()-----------------");
 
-		/*
-		 * Initialize Socket and MTU
-		 */
 		try {
 			socket = new UDPSocket(localPort);
 			mtu = socket.getSendBufferSize();
 			if (mtu == -1) {
 				mtu = Integer.MAX_VALUE;
 			}
-
 		} catch (Exception e) {
 			System.out.println("Error: Initial connection to localPort: " + localPort + " failed");
 			System.err.println(e);
 			return false;
 		}
-
+		maxOutstandingFrames = windowSize/mtu;
+		
 		if (mode == 0) {
 			System.out.println("### Sending " + filename + " on local port : " + localPort + " to address: "
 					+ " on port: " + "using stop-and-wait algorithm ###");
-
-			File file = new File(filename);
+			file = new File(filename);
 			if (!file.exists()) {
 				System.out.println("File Not Found");
 				return false;
 			} else {
 				System.out.println("Successfully found file");
 			}
-			long fileLength = file.length();
-			FileInputStream fis;
-			byte[] header = new byte[3];
-			byte[] message;
-			byte[] transfer;
+			fileLength = file.length();
 			try {
 				fis = new FileInputStream(file);
 			} catch (IOException e) {
@@ -84,11 +84,8 @@ public class RSendUDP implements RSendUDPI {
 			int sequenceNum = 0;
 			int dataRead = 0;
 			while (filePointer < fileLength) {
-				// builds header! more or eof
 				header[0] = (byte) (sequenceNum & 0xFF);
 				header[1] = (byte) ((sequenceNum >> 8) & 0xFF);
-
-				// get message data from file using fis
 				try {
 					if ((filePointer + readSize) <= fileLength) {
 						message = new byte[readSize];
@@ -131,32 +128,21 @@ public class RSendUDP implements RSendUDPI {
 			}
 
 		} else if (mode == 1) {
+			long lastAckReceived; //-1 to start
+			
 			System.out.println("Sending " + filename + " on local port : " + localPort + " to address: " + " on port: "
 					+ "using sliding-window algorithm");
-			UDPSocket socket;
-			long maxSeqNum;
+
+			file = new File("./" + filename);
 			try {
-				// socket that will send message to receiver
-				socket = new UDPSocket(localPort);
-				int mtu = socket.getSendBufferSize();
-				maxSeqNum = windowSize / mtu;
-			} catch (Exception e) {
-				System.err.println(e);
-			}
-			File file = new File("./" + filename);
-			try {
-				FileInputStream fis = new FileInputStream(file);
+				fis = new FileInputStream(file);
 			} catch (IOException e) {
 				e.printStackTrace();
 			}
-			/*
-			 * Build header Seq. # 1 byte, port to respond to 2 Bytes (acksocket), IP to
-			 * respond to
-			 */
 		} else {
 			System.out.println("Error: Mode does not exist");
 		}
-
+		System.out.println("----------------End sendFile()-----------------");
 		return true;
 	}
 
@@ -288,10 +274,10 @@ class Retransmit implements Runnable {
 			if (timeOfTransmit + timeout < System.currentTimeMillis()) {
 				System.out.println("### Retransmitting Packet With Sequence Number: " + seqNum + " ###");
 				try {
-						socket.send(new DatagramPacket(transfer, transfer.length, receiver.getAddress(),
-								receiver.getPort()));
-						timeOfTransmit = System.currentTimeMillis();
-					
+					socket.send(
+							new DatagramPacket(transfer, transfer.length, receiver.getAddress(), receiver.getPort()));
+					timeOfTransmit = System.currentTimeMillis();
+
 				} catch (IOException e) {
 					e.printStackTrace();
 				}

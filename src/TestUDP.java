@@ -11,6 +11,7 @@ public class TestUDP {
 		try {
 			sender = new RSendUDP();
 			sender.setMode(0);
+			sender.setModeParameter(1024);
 			sender.setLocalPort(12988);
 			sender.setFilename("meow.txt");
 			sender.setReceiver( new InetSocketAddress(InetAddress.getLocalHost(), 12986));
