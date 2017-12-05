@@ -36,7 +36,7 @@ public class RSendUDP implements RSendUDPI {
 	private int mtu = 0;
 	private long lastAckReceived, lastFrameSent = -1;
 	private long maxOutstandingFrames;
-	private List<AtomicBoolean> outstandingRetransmitters = Collections.synchronizedList(new ArrayList<AtomicBoolean>());
+	private List<RetransmitRecord> records = Collections.synchronizedList(new ArrayList<RetransmitRecord>());
 	private InetAddress serverAddress;
 	private int serverPort;
 
@@ -87,19 +87,22 @@ public class RSendUDP implements RSendUDPI {
 		int readSize = mtu - header.length;
 		int sequenceNum = 0;
 		int dataRead = 0;
-
+		AtomicBoolean doneReceiving = new AtomicBoolean(false);
+		Receiver r = null;
 		if (mode == 0) {
 			System.out.println("### Sending " + filename + " on local port : " + localPort + " to address: "
 					+ " on port: " + "using stop-and-wait algorithm ###");
 		} else if (mode == 1) {
 			System.out.println("Sending " + filename + " on local port : " + localPort + " to address: " + " on port: "
 					+ "using sliding-window algorithm");
-
+			r = new Receiver(records, doneReceiving, socket);
+			Thread receiverThread = new Thread(r);
+			receiverThread.start();
 		} else {
 			System.out.println("Error: Mode does not exist");
 			return false;
 		}
-		while (filePointer < fileLength) {
+		while (filePointer < fileLength ) {
 			if ((lastFrameSent - lastAckReceived) < maxOutstandingFrames) {
 				header[0] = (byte) (sequenceNum & 0xFF);
 				header[1] = (byte) ((sequenceNum >> 8) & 0xFF);
@@ -148,13 +151,14 @@ public class RSendUDP implements RSendUDPI {
 						ackNotReceived.set(false);
 					}
 					if (mode == 1) {
-						outstandingRetransmitters.add(ackNotReceived);
+						RetransmitRecord record = new RetransmitRecord(ackNotReceived, sequenceNum);
+						records.add(record);
 						/*
 						 * create new thread that receives and updates lar and lfs and kills the thread
 						 * that is retransmitting via an arraylist of atomic booleans... this thread
 						 * might just want to be run once.
 						 */
-						
+
 					}
 				} catch (IOException e) {
 					e.printStackTrace();
@@ -164,6 +168,7 @@ public class RSendUDP implements RSendUDPI {
 		}
 
 		System.out.println("----------------End sendFile()-----------------");
+		doneReceiving.set(true);
 		return true;
 	}
 
@@ -261,32 +266,66 @@ public class RSendUDP implements RSendUDPI {
 	}
 }
 
-class Receives implements Runnable{
-	public List<AtomicBoolean> outstandingBools;
+class Receiver implements Runnable {
+	public List<RetransmitRecord> records;
 	public AtomicBoolean done;
 	public UDPSocket socket;
-	
-	public Receives(List<AtomicBoolean> ob, AtomicBoolean d) {
-		outstandingBools = ob;
+
+	public Receiver(List<RetransmitRecord> r, AtomicBoolean d, UDPSocket s) {
+		records = r;
 		done = d;
+		socket = s;
 	}
-	
+
 	public void run() {
-		byte[] ack = new byte[2];
-		DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
-		try {
-			socket.receive(ackPacket);
-		} catch (IOException e) {
-			e.printStackTrace();
+		while (!done.get()) {
+			byte[] ack = new byte[2];
+			DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
+			try {
+				socket.receive(ackPacket);
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+			int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
+			System.out.println("### Ack received for sequence number: " + ackSeqNum + " ###");
+			setFalse(ackSeqNum);
 		}
-		int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
-		System.out.println("### Ack received for sequence number: " + ackSeqNum + " ###");
-		//set correct atom bool to false and remove from list
+	}
+
+	public void setFalse(int sequenceNumber) {
+		for (int idx =0; idx < records.size(); idx++) {
+			if (records.get(idx).getSeqNum() == sequenceNumber) {
+				records.get(idx).getAckNotReceived().set(false);
+				records.remove(idx);
+			}
+		}
 	}
 }
 
-class RetransmitRecord{
-	private AtomicBoolean 
+class RetransmitRecord {
+	private AtomicBoolean ackNotReceived;
+	private int seqNum;
+
+	public AtomicBoolean getAckNotReceived() {
+		return ackNotReceived;
+	}
+
+	public void setAckNotReceived(AtomicBoolean ackNotReceived) {
+		this.ackNotReceived = ackNotReceived;
+	}
+
+	public int getSeqNum() {
+		return seqNum;
+	}
+
+	public void setSeqNum(int seqNum) {
+		this.seqNum = seqNum;
+	}
+
+	public RetransmitRecord(AtomicBoolean anr, int sn) {
+		ackNotReceived = anr;
+		seqNum = sn;
+	}
 }
 
 class Retransmit implements Runnable {

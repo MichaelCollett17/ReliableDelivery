@@ -55,6 +55,7 @@ public class RReceiveUDP implements RReceiveUDPI {
 		lastAcceptableFrame = maxOutstandingFrames;
 		boolean morePackets = true;
 		boolean first = true;
+		long lastPacket = -100;
 
 		System.out.println("----------------Initiate receiveFile()-----------------");
 
@@ -67,7 +68,7 @@ public class RReceiveUDP implements RReceiveUDPI {
 			return false;
 		}
 
-		while (morePackets) {
+		while (morePackets && ((lastFrameReceived != lastPacket) || (mode==0))) {
 			try {
 				socket.receive(readPacket);
 				if (first) {
@@ -79,27 +80,36 @@ public class RReceiveUDP implements RReceiveUDPI {
 				}
 				int seqNum = ((buffer[1] & 0xff) << 8) | (buffer[0] & 0xff);
 				int moreIndicator = (int) buffer[2];
+				if (moreIndicator == 0) {
+					lastPacket = seqNum;
+				}
 				System.out.println("### Received packet from " + readPacket.getAddress().getHostAddress()
 						+ " with sender port: " + readPacket.getPort() + ", sequence number: " + seqNum + ", and data: "
 						+ (buffer.length - 3) + " ###");
-				if (lastFrameReceived + 1 == seqNum) {
+				if (seqNum < lastFrameReceived + 1) {
+					byte[] ack = new byte[2];
+					ack[0] = buffer[0];
+					ack[1] = buffer[1];
+					socket.send(new DatagramPacket(ack, ack.length,
+							InetAddress.getByName(readPacket.getAddress().getHostAddress()), readPacket.getPort()));
+				}
+				else if (seqNum == lastFrameReceived + 1) {
+					System.out.println("LINE 90 IF STATEMENT");
 					file.write(buffer, 3, buffer.length - 3);
 					data += buffer.length-3;
+					byte[] ack = new byte[2];
+					ack[0] = buffer[0];
+					ack[1] = buffer[1];
+					socket.send(new DatagramPacket(ack, ack.length,
+							InetAddress.getByName(readPacket.getAddress().getHostAddress()), readPacket.getPort()));
 					lastFrameReceived++;
 					lastAcceptableFrame++;
 					checkWindow();
-				} else if ((seqNum > lastFrameReceived) && (seqNum <= lastAcceptableFrame) && mode == 1) {
+				} else if ((seqNum > lastFrameReceived + 1) && seqNum <= (lastFrameReceived + maxOutstandingFrames) && mode == 1) {
 					saveFrame(buffer, seqNum);// modulus operator on loop for purging frames
 				}
-				/*
-				 * Send ACK
-				 */
-				byte[] ack = new byte[2];
-				ack[0] = buffer[0];
-				ack[1] = buffer[1];
-				socket.send(new DatagramPacket(ack, ack.length,
-						InetAddress.getByName(readPacket.getAddress().getHostAddress()), readPacket.getPort()));
-				if (moreIndicator == 0 && (mode == 0 || outstandingFrames.size() == 0)) {
+				
+				if (moreIndicator == 0 && mode==0) {
 					System.out.println("### Received last packet ###");
 					morePackets = false;
 					AtomicBoolean lastAckNotReceived = new AtomicBoolean(false);
@@ -125,6 +135,50 @@ public class RReceiveUDP implements RReceiveUDPI {
 		return true;
 	}
 
+	public void saveFrame(byte[] buffer, int seqNum) {
+		Frame frame = new Frame(buffer, seqNum);
+		outstandingFrames.add(frame);
+	}
+
+	public void checkWindow() {
+		ArrayList<Frame> toBeRemoved = new ArrayList<Frame>();
+		for (int idx = 0; idx < outstandingFrames.size(); idx++) {
+			Frame temp = outstandingFrames.get(idx);
+			if (temp.getSeqNum() <= lastFrameReceived) {
+				//outstandingFrames.remove(idx);
+				byte[] buffer = temp.getBuffer();
+				byte[] ack = new byte[2];
+				ack[0] = buffer[0];
+				ack[1] = buffer[1];
+				toBeRemoved.add(temp);
+				try {
+					socket.send(new DatagramPacket(ack, ack.length, clientAddress, clientPort));
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+			} else if (temp.getSeqNum() == (lastFrameReceived + 1)) {
+				
+				byte[] buffer = temp.getBuffer();
+				byte[] ack = new byte[2];
+				ack[0] = buffer[0];
+				ack[1] = buffer[1];
+				try {
+					file.write(buffer, 3, buffer.length - 3);
+					socket.send(new DatagramPacket(ack, ack.length, clientAddress, clientPort));
+				} catch (IOException e) {
+					e.printStackTrace();
+				}
+				lastFrameReceived++;
+				lastAcceptableFrame++;
+				//outstandingFrames.remove(idx);
+				toBeRemoved.add(temp);
+			}
+		}
+		for(Frame f: toBeRemoved) {
+			outstandingFrames.remove(f);
+		}
+	}
+	
 	// returns file name
 	public String getFilename() {
 		return filename;
@@ -180,35 +234,6 @@ public class RReceiveUDP implements RReceiveUDPI {
 	public boolean setModeParameter(long arg0) {
 		windowSize = arg0;
 		return false;
-	}
-
-	public void saveFrame(byte[] buffer, int seqNum) {
-		Frame frame = new Frame(buffer, seqNum);
-		outstandingFrames.add(frame);
-	}
-
-	public void checkWindow() {
-		for (int idx = 0; idx < outstandingFrames.size(); idx++) {
-			Frame temp = outstandingFrames.get(idx);
-			if (temp.getSeqNum() <= lastFrameReceived) {
-				outstandingFrames.remove(idx);
-			} else if (temp.getSeqNum() == (lastFrameReceived + 1)) {
-				
-				byte[] buffer = temp.getBuffer();
-				byte[] ack = new byte[2];
-				ack[0] = buffer[0];
-				ack[1] = buffer[1];
-				try {
-					file.write(buffer, 3, buffer.length - 3);
-					socket.send(new DatagramPacket(ack, ack.length, clientAddress, clientPort));
-				} catch (IOException e) {
-					e.printStackTrace();
-				}
-				lastFrameReceived++;
-				lastAcceptableFrame++;
-				outstandingFrames.remove(idx);
-			}
-		}
 	}
 }
 
