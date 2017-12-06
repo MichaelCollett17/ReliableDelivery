@@ -104,6 +104,7 @@ public class RSendUDP implements RSendUDPI {
 		}
 		while (filePointer < fileLength ) {
 			if ((lastFrameSent - lastAckReceived) < maxOutstandingFrames) {
+				System.out.println("LIST SIZE: " + records.size());
 				header[0] = (byte) (sequenceNum & 0xFF);
 				header[1] = (byte) ((sequenceNum >> 8) & 0xFF);
 				try {
@@ -168,7 +169,7 @@ public class RSendUDP implements RSendUDPI {
 		}
 
 		System.out.println("----------------End sendFile()-----------------");
-		doneReceiving.set(true);
+		//doneReceiving.set(true);
 		return true;
 	}
 
@@ -283,22 +284,26 @@ class Receiver implements Runnable {
 			DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
 			try {
 				socket.receive(ackPacket);
+				int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
+				System.out.println("### Ack received for sequence number: " + ackSeqNum + " ###");
+				setFalse(ackSeqNum);
 			} catch (IOException e) {
 				e.printStackTrace();
 			}
-			int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
-			System.out.println("### Ack received for sequence number: " + ackSeqNum + " ###");
-			setFalse(ackSeqNum);
 		}
 	}
 
 	public void setFalse(int sequenceNumber) {
+		ArrayList<RetransmitRecord> toBeRemoved = new ArrayList<RetransmitRecord>();
 		for (int idx =0; idx < records.size(); idx++) {
-			if (records.get(idx).getSeqNum() == sequenceNumber) {
-				records.get(idx).getAckNotReceived().set(false);
-				records.remove(idx);
+			RetransmitRecord temp = records.get(idx);
+			if (temp.getSeqNum() == sequenceNumber) {
+				temp.getAckNotReceived().set(false);
+				toBeRemoved.add(temp);
 			}
 		}
+		records.removeAll(toBeRemoved);
+		System.out.println("Records size: " + records.size());
 	}
 }
 

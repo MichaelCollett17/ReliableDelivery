@@ -10,7 +10,7 @@ public class TestUDP {
 		RSendUDP sender;
 		try {
 			sender = new RSendUDP();
-			sender.setMode(0);
+			sender.setMode(1);
 			sender.setModeParameter(1024);
 			sender.setLocalPort(12988);
 			sender.setFilename("meow.txt");

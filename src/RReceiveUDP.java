@@ -49,8 +49,7 @@ public class RReceiveUDP implements RReceiveUDPI {
 		} catch (IOException e1) {
 			e1.printStackTrace();
 		}
-		byte[] buffer = new byte[mtu];
-		DatagramPacket readPacket = new DatagramPacket(buffer, buffer.length);
+		
 		long maxOutstandingFrames = windowSize / mtu;
 		lastAcceptableFrame = maxOutstandingFrames;
 		boolean morePackets = true;
@@ -70,6 +69,8 @@ public class RReceiveUDP implements RReceiveUDPI {
 
 		while (morePackets && ((lastFrameReceived != lastPacket) || (mode==0))) {
 			try {
+				byte[] buffer = new byte[mtu];
+				DatagramPacket readPacket = new DatagramPacket(buffer, buffer.length);
 				socket.receive(readPacket);
 				if (first) {
 					clientAddress = readPacket.getAddress();
@@ -96,6 +97,7 @@ public class RReceiveUDP implements RReceiveUDPI {
 				else if (seqNum == lastFrameReceived + 1) {
 					System.out.println("LINE 90 IF STATEMENT");
 					file.write(buffer, 3, buffer.length - 3);
+					System.out.println("Writing seqNum: " + seqNum);
 					data += buffer.length-3;
 					byte[] ack = new byte[2];
 					ack[0] = buffer[0];
@@ -137,46 +139,46 @@ public class RReceiveUDP implements RReceiveUDPI {
 
 	public void saveFrame(byte[] buffer, int seqNum) {
 		Frame frame = new Frame(buffer, seqNum);
+		System.out.println("SAVE FRAME \n SeqNum: " + seqNum +"\n" + "Buffer: " + new String(buffer));
+		System.out.println("SAVE FRAME \n SeqNumba: " + frame.getSeqNum() +"\n" + "Bufferba: " + new String(frame.getBuffer()));
 		outstandingFrames.add(frame);
 	}
 
 	public void checkWindow() {
 		ArrayList<Frame> toBeRemoved = new ArrayList<Frame>();
-		for (int idx = 0; idx < outstandingFrames.size(); idx++) {
-			Frame temp = outstandingFrames.get(idx);
-			if (temp.getSeqNum() <= lastFrameReceived) {
-				//outstandingFrames.remove(idx);
-				byte[] buffer = temp.getBuffer();
+		for (Frame f: outstandingFrames) {
+			if (f.getSeqNum() <= lastFrameReceived) {
+				byte[] buffer = f.getBuffer();
 				byte[] ack = new byte[2];
 				ack[0] = buffer[0];
 				ack[1] = buffer[1];
-				toBeRemoved.add(temp);
+				toBeRemoved.add(f);
 				try {
 					socket.send(new DatagramPacket(ack, ack.length, clientAddress, clientPort));
 				} catch (IOException e) {
 					e.printStackTrace();
 				}
-			} else if (temp.getSeqNum() == (lastFrameReceived + 1)) {
-				
-				byte[] buffer = temp.getBuffer();
+			} else if (f.getSeqNum() == (lastFrameReceived + 1)) {
+				byte[] buffer = f.getBuffer();
 				byte[] ack = new byte[2];
 				ack[0] = buffer[0];
 				ack[1] = buffer[1];
+				int acksn = ((buffer[1] & 0xff) << 8) | (buffer[0] & 0xff);
+				System.out.println("ack: " + acksn);
+				System.out.println("Received " + new String(buffer));
 				try {
 					file.write(buffer, 3, buffer.length - 3);
+					System.out.println("Writing for Sequence #: " + f.getSeqNum());
 					socket.send(new DatagramPacket(ack, ack.length, clientAddress, clientPort));
 				} catch (IOException e) {
 					e.printStackTrace();
 				}
 				lastFrameReceived++;
 				lastAcceptableFrame++;
-				//outstandingFrames.remove(idx);
-				toBeRemoved.add(temp);
+				toBeRemoved.add(f);
 			}
 		}
-		for(Frame f: toBeRemoved) {
-			outstandingFrames.remove(f);
-		}
+		outstandingFrames.removeAll(toBeRemoved);
 	}
 	
 	// returns file name
