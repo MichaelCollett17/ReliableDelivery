@@ -14,7 +14,8 @@ import edu.utulsa.unet.UDPSocket;
 /*
  * Problems to fix:
  * 1. Special 128 byte to signify completion and return true and print end file
- * 2. header ish
+ * 2. cleanup 
+ * 3. test
  */
 
 public class RReceiveUDP implements RReceiveUDPI {
@@ -22,7 +23,7 @@ public class RReceiveUDP implements RReceiveUDPI {
 	private int localPort = 12987;
 	private int mode = 0;
 	private long windowSize = 256;
-	final static int headerLength = 3;
+	final static int headerLength = 5;
 	private UDPSocket socket;
 	private int mtu;
 	private long data = 0;
@@ -81,8 +82,8 @@ public class RReceiveUDP implements RReceiveUDPI {
 							"### Connection established with " + clientAddress + " on port " + clientPort + " ###");
 					first = false;
 				}
-				int seqNum = ((buffer[1] & 0xff) << 8) | (buffer[0] & 0xff);
-				int moreIndicator = (int) buffer[2];
+				long seqNum = ((buffer[3] & 0xff) << 24) | ((buffer[2] & 0xff) << 16) | ((buffer[1] & 0xff) << 8) | (buffer[0] & 0xff);
+				int moreIndicator = (int) buffer[4];
 				if (moreIndicator == 0) {
 					lastPacket = seqNum;
 				}
@@ -90,20 +91,24 @@ public class RReceiveUDP implements RReceiveUDPI {
 						+ " with sender port: " + readPacket.getPort() + ", sequence number: " + seqNum + ", and data: "
 						+ (buffer.length - 3) + " ###");
 				if (seqNum < lastFrameReceived + 1) {
-					byte[] ack = new byte[2];
+					byte[] ack = new byte[5];
 					ack[0] = buffer[0];
 					ack[1] = buffer[1];
+					ack[2] = buffer[2];
+					ack[3] = buffer[3];
 					socket.send(new DatagramPacket(ack, ack.length,
 							InetAddress.getByName(readPacket.getAddress().getHostAddress()), readPacket.getPort()));
 				}
 				else if (seqNum == lastFrameReceived + 1) {
 					System.out.println("LINE 90 IF STATEMENT");
-					file.write(buffer, 3, buffer.length - 3);
+					file.write(buffer, headerLength, buffer.length - headerLength);
 					System.out.println("Writing seqNum: " + seqNum);
 					data += buffer.length-3;
-					byte[] ack = new byte[2];
+					byte[] ack = new byte[5];
 					ack[0] = buffer[0];
 					ack[1] = buffer[1];
+					ack[2] = buffer[2];
+					ack[3] = buffer[3];
 					socket.send(new DatagramPacket(ack, ack.length,
 							InetAddress.getByName(readPacket.getAddress().getHostAddress()), readPacket.getPort()));
 					lastFrameReceived++;
@@ -139,7 +144,7 @@ public class RReceiveUDP implements RReceiveUDPI {
 		return true;
 	}
 
-	public void saveFrame(byte[] buffer, int seqNum) {
+	public void saveFrame(byte[] buffer, long seqNum) {
 		Frame frame = new Frame(buffer, seqNum);
 		System.out.println("SAVE FRAME \n SeqNum: " + seqNum +"\n" + "Buffer: " + new String(buffer));
 		System.out.println("SAVE FRAME \n SeqNumba: " + frame.getSeqNum() +"\n" + "Bufferba: " + new String(frame.getBuffer()));
@@ -151,9 +156,11 @@ public class RReceiveUDP implements RReceiveUDPI {
 		for (Frame f: outstandingFrames) {
 			if (f.getSeqNum() <= lastFrameReceived) {
 				byte[] buffer = f.getBuffer();
-				byte[] ack = new byte[2];
+				byte[] ack = new byte[5];
 				ack[0] = buffer[0];
 				ack[1] = buffer[1];
+				ack[2] = buffer[2];
+				ack[3] = buffer[3];
 				toBeRemoved.add(f);
 				try {
 					socket.send(new DatagramPacket(ack, ack.length, clientAddress, clientPort));
@@ -162,15 +169,13 @@ public class RReceiveUDP implements RReceiveUDPI {
 				}
 			} else if (f.getSeqNum() == (lastFrameReceived + 1)) {
 				byte[] buffer = f.getBuffer();
-				byte[] ack = new byte[2];
+				byte[] ack = new byte[5];
 				ack[0] = buffer[0];
 				ack[1] = buffer[1];
-				int acksn = ((buffer[1] & 0xff) << 8) | (buffer[0] & 0xff);
-				System.out.println("ack: " + acksn);
-				System.out.println("Received " + new String(buffer));
+				ack[2] = buffer[2];
+				ack[3] = buffer[3];
 				try {
-					file.write(buffer, 3, buffer.length - 3);
-					System.out.println("Writing for Sequence #: " + f.getSeqNum());
+					file.write(buffer, headerLength, buffer.length - headerLength);
 					socket.send(new DatagramPacket(ack, ack.length, clientAddress, clientPort));
 				} catch (IOException e) {
 					e.printStackTrace();
@@ -266,7 +271,7 @@ class LastAckCheck implements Runnable {
 
 class Frame {
 	private byte[] buffer;
-	private int seqNum;
+	private long seqNum;
 
 	public byte[] getBuffer() {
 		return buffer;
@@ -276,15 +281,15 @@ class Frame {
 		this.buffer = buffer;
 	}
 
-	public int getSeqNum() {
+	public long getSeqNum() {
 		return seqNum;
 	}
 
-	public void setSeqNum(int seqNum) {
+	public void setSeqNum(long seqNum) {
 		this.seqNum = seqNum;
 	}
 
-	public Frame(byte[] b, int sn) {
+	public Frame(byte[] b, long sn) {
 		buffer = b;
 		seqNum = sn;
 	}

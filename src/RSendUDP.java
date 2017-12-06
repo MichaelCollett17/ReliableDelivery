@@ -24,7 +24,8 @@ import edu.utulsa.unet.UDPSocket;
 /*
  * Problems to fix:
  *  1. Special 128 byte to signify completion should terminate everything, return true, and exit
- *  2. header 4 seqnum, 1 last/special 
+ *  2. cleanup 
+ *  3. test
  */
 
 public class RSendUDP implements RSendUDPI {
@@ -54,7 +55,7 @@ public class RSendUDP implements RSendUDPI {
 		File file;
 		long fileLength;
 		FileInputStream fis;
-		byte[] header = new byte[3];
+		byte[] header = new byte[5];
 		byte[] message;
 		byte[] transfer;
 		boolean first = true;
@@ -112,17 +113,19 @@ public class RSendUDP implements RSendUDPI {
 				System.out.println("LIST SIZE: " + records.size());
 				header[0] = (byte) (sequenceNum & 0xFF);
 				header[1] = (byte) ((sequenceNum >> 8) & 0xFF);
+				header[2] = (byte) ((sequenceNum >> 16) & 0xFF);
+				header[3] = (byte) ((sequenceNum >> 24) & 0xFF);
 				try {
 					if ((filePointer + readSize) <= fileLength) {
 						message = new byte[readSize];
 						dataRead = fis.read(message, 0, readSize);
 						filePointer += readSize;
-						header[2] = (byte) 255;// signifies more messages are coming
+						header[4] = (byte) 255;// signifies more messages are coming
 					} else {
 						message = new byte[(int) (fileLength - filePointer)];
 						dataRead = fis.read(message, 0, (int) fileLength - filePointer);
 						filePointer = (int) fileLength;
-						header[2] = (byte) 0;// signifies last message transmitted
+						header[4] = (byte) 0;// signifies last message transmitted
 					}
 				} catch (IOException e) {
 					e.printStackTrace();
@@ -143,7 +146,7 @@ public class RSendUDP implements RSendUDPI {
 					retransThread.start();
 					lastFrameSent.incrementAndGet();
 					if (mode == 0) {
-						byte[] ack = new byte[2];
+						byte[] ack = new byte[5];
 						DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
 						socket.receive(ackPacket);
 						if (first) {
@@ -153,7 +156,7 @@ public class RSendUDP implements RSendUDPI {
 									+ serverPort + " ###");
 							first = false;
 						}
-						int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
+						int ackSeqNum = ((ack[3] & 0xff) << 24) |((ack[2] & 0xff) << 16) |((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
 						System.out.println("### Ack received for sequence number: " + ackSeqNum + " ###");
 						ackNotReceived.set(false);
 					}
@@ -291,11 +294,11 @@ class Receiver implements Runnable {
 
 	public void run() {
 		while (!done.get()) {
-			byte[] ack = new byte[2];
+			byte[] ack = new byte[5];
 			DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
 			try {
 				socket.receive(ackPacket);
-				long ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
+				long ackSeqNum = ((ack[3] & 0xff) << 24) |((ack[2] & 0xff) << 16) |((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
 				if(ackSeqNum == lastAckReceived.get()+ 1) {
 					lastAckReceived.incrementAndGet();
 					checkAckRecords();
@@ -410,7 +413,7 @@ class Retransmit implements Runnable {
 
 	public void run() {
 		long timeOfTransmit = System.currentTimeMillis();
-		int seqNum = ((transfer[1] & 0xff) << 8) | (transfer[0] & 0xff);
+		int seqNum = ((transfer[3] & 0xff) << 24) | ((transfer[2] & 0xff) << 16) | ((transfer[1] & 0xff) << 8) | (transfer[0] & 0xff);
 		while (ackNotReceived.get()) {
 			if (timeOfTransmit + timeout < System.currentTimeMillis()) {
 				System.out.println("### Retransmitting Packet With Sequence Number: " + seqNum + " ###");
