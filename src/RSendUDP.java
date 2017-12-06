@@ -16,12 +16,15 @@ import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+
 import edu.utulsa.unet.RSendUDPI;
 import edu.utulsa.unet.UDPSocket;
 
 /*
  * Problems to fix:
- *  1. Continuous transmission of last piece kind of fixed
+ *  1. Special 128 byte to signify completion should terminate everything, return true, and exit
+ *  2. header 4 seqnum, 1 last/special 
  */
 
 public class RSendUDP implements RSendUDPI {
@@ -34,7 +37,8 @@ public class RSendUDP implements RSendUDPI {
 	private long timeout = 1000;
 	private UDPSocket socket;
 	private int mtu = 0;
-	private long lastAckReceived, lastFrameSent = -1;
+	private AtomicLong lastAckReceived = new AtomicLong(-1);
+	private AtomicLong lastFrameSent = new AtomicLong(-1);
 	private long maxOutstandingFrames;
 	private List<RetransmitRecord> records = Collections.synchronizedList(new ArrayList<RetransmitRecord>());
 	private InetAddress serverAddress;
@@ -68,6 +72,7 @@ public class RSendUDP implements RSendUDPI {
 			return false;
 		}
 		maxOutstandingFrames = windowSize / mtu;
+		System.out.println("MaxOutStandingFrames " + maxOutstandingFrames);
 
 		file = new File(filename);
 		if (!file.exists()) {
@@ -95,7 +100,7 @@ public class RSendUDP implements RSendUDPI {
 		} else if (mode == 1) {
 			System.out.println("Sending " + filename + " on local port : " + localPort + " to address: " + " on port: "
 					+ "using sliding-window algorithm");
-			r = new Receiver(records, doneReceiving, socket);
+			r = new Receiver(records, doneReceiving, socket, lastAckReceived, lastFrameSent);
 			Thread receiverThread = new Thread(r);
 			receiverThread.start();
 		} else {
@@ -103,7 +108,7 @@ public class RSendUDP implements RSendUDPI {
 			return false;
 		}
 		while (filePointer < fileLength ) {
-			if ((lastFrameSent - lastAckReceived) < maxOutstandingFrames) {
+			if ((lastFrameSent.get() - lastAckReceived.get()) < maxOutstandingFrames) {
 				System.out.println("LIST SIZE: " + records.size());
 				header[0] = (byte) (sequenceNum & 0xFF);
 				header[1] = (byte) ((sequenceNum >> 8) & 0xFF);
@@ -136,6 +141,7 @@ public class RSendUDP implements RSendUDPI {
 					socket.send(
 							new DatagramPacket(transfer, transfer.length, receiver.getAddress(), receiver.getPort()));
 					retransThread.start();
+					lastFrameSent.incrementAndGet();
 					if (mode == 0) {
 						byte[] ack = new byte[2];
 						DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
@@ -271,11 +277,16 @@ class Receiver implements Runnable {
 	public List<RetransmitRecord> records;
 	public AtomicBoolean done;
 	public UDPSocket socket;
+	private AtomicLong lastAckReceived = new AtomicLong(-1);
+	private AtomicLong lastFrameSent = new AtomicLong(-1);
+	private ArrayList<Long> ackRecords = new ArrayList<Long>();
 
-	public Receiver(List<RetransmitRecord> r, AtomicBoolean d, UDPSocket s) {
+	public Receiver(List<RetransmitRecord> r, AtomicBoolean d, UDPSocket s, AtomicLong lar, AtomicLong lfs) {
 		records = r;
 		done = d;
 		socket = s;
+		lastAckReceived = lar;
+		lastFrameSent = lfs;
 	}
 
 	public void run() {
@@ -284,7 +295,14 @@ class Receiver implements Runnable {
 			DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
 			try {
 				socket.receive(ackPacket);
-				int ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
+				long ackSeqNum = ((ack[1] & 0xff) << 8) | (ack[0] & 0xff);
+				if(ackSeqNum == lastAckReceived.get()+ 1) {
+					lastAckReceived.incrementAndGet();
+					checkAckRecords();
+				}
+				else {
+					ackRecords.add(ackSeqNum);
+				}
 				System.out.println("### Ack received for sequence number: " + ackSeqNum + " ###");
 				setFalse(ackSeqNum);
 			} catch (IOException e) {
@@ -293,7 +311,21 @@ class Receiver implements Runnable {
 		}
 	}
 
-	public void setFalse(int sequenceNumber) {
+	private void checkAckRecords() {
+		ArrayList<Long> tBR = new ArrayList<Long>();
+		for(Long l: ackRecords) {
+			if(l.longValue() <= lastAckReceived.get()) {
+				tBR.add(l);
+			}
+			else if(l.longValue() == (lastAckReceived.get() + 1)) {
+				lastAckReceived.incrementAndGet();
+				tBR.add(l);
+			}
+		}
+		ackRecords.removeAll(tBR);
+	}
+
+	public void setFalse(long sequenceNumber) {
 		ArrayList<RetransmitRecord> toBeRemoved = new ArrayList<RetransmitRecord>();
 		for (int idx =0; idx < records.size(); idx++) {
 			RetransmitRecord temp = records.get(idx);
@@ -304,6 +336,22 @@ class Receiver implements Runnable {
 		}
 		records.removeAll(toBeRemoved);
 		System.out.println("Records size: " + records.size());
+	}
+
+	public AtomicLong getLastAckReceived() {
+		return lastAckReceived;
+	}
+
+	public void setLastAckReceived(AtomicLong lastAckReceived) {
+		this.lastAckReceived = lastAckReceived;
+	}
+
+	public AtomicLong getLastFrameSent() {
+		return lastFrameSent;
+	}
+
+	public void setLastFrameSent(AtomicLong lastFrameSent) {
+		this.lastFrameSent = lastFrameSent;
 	}
 }
 

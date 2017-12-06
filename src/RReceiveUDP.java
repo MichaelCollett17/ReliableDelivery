@@ -13,6 +13,8 @@ import edu.utulsa.unet.UDPSocket;
 
 /*
  * Problems to fix:
+ * 1. Special 128 byte to signify completion and return true and print end file
+ * 2. header ish
  */
 
 public class RReceiveUDP implements RReceiveUDPI {
