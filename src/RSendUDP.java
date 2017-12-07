@@ -1,20 +1,13 @@
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
-import java.net.Socket;
-import java.net.SocketException;
 import java.net.UnknownHostException;
-import java.time.*;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Date;
 import java.util.List;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -75,14 +68,13 @@ public class RSendUDP implements RSendUDPI {
 			return false;
 		}
 		maxOutstandingFrames = windowSize / mtu;
-		System.out.println("MaxOutStandingFrames " + maxOutstandingFrames);
 
 		file = new File(filename);
 		if (!file.exists()) {
-			System.out.println("File Not Found");
+			System.out.println("### File Not Found ###");
 			return false;
 		} else {
-			System.out.println("Successfully found file");
+			System.out.println("### Successfully found file ###");
 		}
 		fileLength = file.length();
 		try {
@@ -101,8 +93,8 @@ public class RSendUDP implements RSendUDPI {
 			System.out.println("### Sending " + filename + " on local port : " + localPort + " to address: "
 					+ " on port: " + "using stop-and-wait algorithm ###");
 		} else if (mode == 1) {
-			System.out.println("Sending " + filename + " on local port : " + localPort + " to address: " + " on port: "
-					+ "using sliding-window algorithm");
+			System.out.println("### Sending " + filename + " on local port : " + localPort + " to address: " + " on port: "
+					+ "using sliding-window algorithm ###");
 			r = new Receiver(records, doneReceiving, socket, lastAckReceived, lastFrameSent, initTime, fileLength, filename);
 			Thread receiverThread = new Thread(r);
 			receiverThread.start();
@@ -112,7 +104,6 @@ public class RSendUDP implements RSendUDPI {
 		}
 		while (filePointer < fileLength) {
 			if ((lastFrameSent.get() - lastAckReceived.get()) < maxOutstandingFrames) {
-				System.out.println("LIST SIZE: " + records.size());
 				header[0] = (byte) (sequenceNum & 0xFF);
 				header[1] = (byte) ((sequenceNum >> 8) & 0xFF);
 				header[2] = (byte) ((sequenceNum >> 16) & 0xFF);
@@ -150,7 +141,6 @@ public class RSendUDP implements RSendUDPI {
 						lastFrameSent.incrementAndGet();
 					}
 					if (mode == 0) {
-						System.out.println("EDIT SEQNUM WHAT: " + sequenceNum);
 						byte[] ack = new byte[5];
 						DatagramPacket ackPacket = new DatagramPacket(ack, ack.length);
 						socket.receive(ackPacket);
@@ -366,7 +356,6 @@ class Receiver implements Runnable {
 			}
 		}
 		records.removeAll(toBeRemoved);
-		System.out.println("Records size: " + records.size());
 	}
 
 	public AtomicLong getLastAckReceived() {

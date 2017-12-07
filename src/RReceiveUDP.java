@@ -1,10 +1,8 @@
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.InetAddress;
-import java.net.SocketException;
 import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -129,19 +127,6 @@ public class RReceiveUDP implements RReceiveUDPI {
 							.println("Succesfully received " + filename + " (" + data + " bytes)" + " in "+ elapsedTime + " seconds");
 					return true;
 				}
-				/*
-				 * if (moreIndicator == 0 && mode == 0) {
-				 * System.out.println("### Received last packet ###"); morePackets = false;
-				 * AtomicBoolean lastAckNotReceived = new AtomicBoolean(false); LastAckCheck
-				 * lastAckCheck = new LastAckCheck(readPacket, socket, lastAckNotReceived);
-				 * Thread lastAckCheckThread = new Thread(lastAckCheck);
-				 * lastAckCheckThread.start(); long timeFromNow = System.currentTimeMillis() +
-				 * 3000; while (System.currentTimeMillis() < timeFromNow) { } if
-				 * (lastAckNotReceived.get()) { morePackets = true; } else { //
-				 * lastAckNotReceived.set(true);
-				 * System.out.println("----------------End receiveFile()-----------------");
-				 * return true; } }
-				 */
 			} catch (IOException e) {
 				e.printStackTrace();
 				return false;
@@ -152,9 +137,6 @@ public class RReceiveUDP implements RReceiveUDPI {
 
 	public void saveFrame(byte[] buffer, long seqNum) {
 		Frame frame = new Frame(buffer, seqNum);
-		System.out.println("SAVE FRAME \n SeqNum: " + seqNum + "\n" + "Buffer: " + new String(buffer));
-		System.out.println(
-				"SAVE FRAME \n SeqNumba: " + frame.getSeqNum() + "\n" + "Bufferba: " + new String(frame.getBuffer()));
 		outstandingFrames.add(frame);
 	}
 
